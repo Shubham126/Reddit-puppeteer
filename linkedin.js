@@ -80,36 +80,43 @@ async function likePost(post) {
   }
 }
 
-// Comment on post using placeholder and comment button id
-async function commentOnPost(page, commentText = "Interested") {
+// Comment on a specific post element properly scoped, avoiding global selection
+async function commentOnSpecificPost(post, commentText = "Interested") {
   try {
-    await page.waitForSelector('div.ql-editor[contenteditable="true"][aria-placeholder="Add a comment…"]', { timeout: 15000 });
+    const commentIcon = await post.$('svg use[href="#comment-small"]');
+    if (!commentIcon) {
+      console.log('❌ Comment icon not found in post');
+      return false;
+    }
+    const commentBtnParent = await commentIcon.evaluateHandle(node => node.parentElement.parentElement);
+    await commentBtnParent.click();
+    console.log('💬 Opened comment box in current post');
+    await sleep(3500);
 
-    const commentBox = await page.$('div.ql-editor[contenteditable="true"][aria-placeholder="Add a comment…"]');
+    const commentBox = await post.$('div.ql-editor[contenteditable="true"][aria-placeholder="Add a comment…"]');
     if (!commentBox) {
-      console.log('❌ Comment box not found');
+      console.log('❌ Comment box not found in post');
       return false;
     }
     await commentBox.click();
     await sleep(1000);
 
-    await page.keyboard.type(commentText, { delay: randomDelay(150, 250) });
+    await commentBox.type(commentText, { delay: randomDelay(150, 250) });
     console.log(`💬 Typed comment: ${commentText}`);
 
     await sleep(randomDelay(2000, 3000));
 
-    const postButton = await page.$('button.comments-comment-box__submit-button--cr');
+    const postButton = await post.$('button.comments-comment-box__submit-button--cr');
     if (!postButton) {
-      console.log('❌ Comment submit button not found');
+      console.log('❌ Comment submit button not found in post');
       return false;
     }
-
     await postButton.click();
-    console.log('📤 Comment submitted!');
+    console.log('📤 Comment submitted in post!');
     await sleep(randomDelay(3000, 5000));
     return true;
   } catch (error) {
-    console.error('❌ Error commenting:', error.message);
+    console.error('❌ Error commenting in post:', error.message);
     return false;
   }
 }
@@ -138,7 +145,7 @@ async function linkedInAutomation() {
       return;
     }
 
-    // Go to LinkedIn feed with navigation timeout handling
+    // Go to LinkedIn feed
     try {
       await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle2', timeout: 60000 });
     } catch (error) {
@@ -150,7 +157,7 @@ async function linkedInAutomation() {
     }
     await sleep(5000);
 
-    const maxPosts = 10;  // Limit number of posts to process
+    const maxPosts = 10; // Limit number of posts to process
     let postsProcessed = 0;
 
     while (postsProcessed < maxPosts) {
@@ -171,21 +178,9 @@ async function linkedInAutomation() {
 
       await likePost(post);
 
-      const commentIcon = await post.$('svg use[href="#comment-small"]');
-      if (commentIcon) {
-        const commentBtnParent = await commentIcon.evaluateHandle(node => node.parentElement.parentElement);
-        try {
-          await commentBtnParent.click();
-          console.log('💬 Opened comment box');
-          await sleep(3500);
-
-          await commentOnPost(page);
-
-        } catch (error) {
-          console.log('❌ Error opening comment box:', error.message);
-        }
-      } else {
-        console.log('❌ Comment icon not found');
+      const commentSuccess = await commentOnSpecificPost(post, "Interested");
+      if (!commentSuccess) {
+        console.log('⚠️ Comment failed for this post');
       }
 
       postsProcessed++;
