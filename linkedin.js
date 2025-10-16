@@ -11,28 +11,28 @@ function randomDelay(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Login function
+// Login function with navigation timeout handling
 async function linkedInLogin(page) {
   try {
     console.log('🔐 Logging into LinkedIn...');
     await page.goto("https://www.linkedin.com/login", { waitUntil: "networkidle2" });
-    
+
     await page.waitForSelector('input[name="session_key"]', { timeout: 10000 });
-    await page.type('input[name="session_key"]', process.env.LINKEDIN_USERNAME, { delay: 100 });
-    await page.type('input[name="session_password"]', process.env.LINKEDIN_PASSWORD, { delay: 100 });
-    
+    await page.type('input[name="session_key"]', process.env.LINKEDIN_USERNAME, { delay: randomDelay(150, 250) });
+    await page.type('input[name="session_password"]', process.env.LINKEDIN_PASSWORD, { delay: randomDelay(150, 250) });
+
     await page.keyboard.press("Enter");
     try {
       await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
       console.log('✅ Login successful!');
     } catch (navError) {
       if (navError.message.includes("Navigation timeout")) {
-        console.log("⚠️ Navigation timeout, but proceeding assuming login success...");
+        console.log("⚠️ Navigation timeout after login, proceeding assuming login success...");
       } else {
         throw navError;
       }
     }
-    
+
     await sleep(3000);
     return true;
   } catch (error) {
@@ -41,57 +41,164 @@ async function linkedInLogin(page) {
   }
 }
 
-// Scroll using mouse wheel
-async function scrollWithMouseWheel(page, scrollTimes = 15, scrollAmount = 800, delayMs = 1500) {
-  console.log(`🐭 Starting to scroll with mouse wheel ${scrollTimes} times`);
-
-  for (let i = 0; i < scrollTimes; i++) {
-    await page.mouse.wheel({ deltaY: scrollAmount });
-    console.log(`🐾 Scrolled ${i + 1} times with mouse wheel`);
-    await sleep(delayMs);
-  }
-
-  console.log('✅ Finished scrolling with mouse wheel');
+// Scroll down one post using mouse wheel
+async function scrollOnce(page) {
+  console.log('🐭 Scrolling down one post...');
+  await page.mouse.wheel({ deltaY: 800 });
+  await sleep(randomDelay(3000, 4500));
 }
 
-// Main automation function
+// Like a post by clicking thumbs-up SVG within post
+async function likePost(post) {
+  try {
+    const likeButton = await post.$('svg use[href="#thumbs-up-outline-small"]');
+    if (!likeButton) {
+      console.log('❌ Like icon not found in post');
+      return false;
+    }
+
+    const likeBtnParent = await likeButton.evaluateHandle(node => node.parentElement);
+    if (!likeBtnParent) {
+      console.log('❌ Could not get like button parent');
+      return false;
+    }
+
+    const isLiked = await likeBtnParent.evaluate(el => el.getAttribute('aria-pressed') === 'true');
+
+    if (isLiked) {
+      console.log('⚠️ Already liked');
+      return false;
+    }
+
+    await likeBtnParent.click();
+    console.log('👍 Post liked!');
+    await sleep(randomDelay(2000, 4000));
+    return true;
+  } catch (error) {
+    console.error('❌ Error liking post:', error.message);
+    return false;
+  }
+}
+
+// Comment on post using placeholder and comment button id
+async function commentOnPost(page, commentText = "Interested") {
+  try {
+    await page.waitForSelector('div.ql-editor[contenteditable="true"][aria-placeholder="Add a comment…"]', { timeout: 15000 });
+
+    const commentBox = await page.$('div.ql-editor[contenteditable="true"][aria-placeholder="Add a comment…"]');
+    if (!commentBox) {
+      console.log('❌ Comment box not found');
+      return false;
+    }
+    await commentBox.click();
+    await sleep(1000);
+
+    await page.keyboard.type(commentText, { delay: randomDelay(150, 250) });
+    console.log(`💬 Typed comment: ${commentText}`);
+
+    await sleep(randomDelay(2000, 3000));
+
+    const postButton = await page.$('button.comments-comment-box__submit-button--cr');
+    if (!postButton) {
+      console.log('❌ Comment submit button not found');
+      return false;
+    }
+
+    await postButton.click();
+    console.log('📤 Comment submitted!');
+    await sleep(randomDelay(3000, 5000));
+    return true;
+  } catch (error) {
+    console.error('❌ Error commenting:', error.message);
+    return false;
+  }
+}
+
+// Main automation flow
 async function linkedInAutomation() {
   if (!process.env.LINKEDIN_USERNAME || !process.env.LINKEDIN_PASSWORD) {
-    console.error('❌ Error: LINKEDIN_USERNAME and LINKEDIN_PASSWORD must be set in .env file');
+    console.error('❌ Please set LINKEDIN_USERNAME and LINKEDIN_PASSWORD in your .env file');
     return;
   }
 
-  const browser = await puppeteer.launch({ 
-    headless: false, 
-    defaultViewport: null, 
-    args: ['--start-maximized', '--no-sandbox', '--disable-setuid-sandbox'] 
+  const browser = await puppeteer.launch({
+    headless: false,
+    defaultViewport: null,
+    args: ["--start-maximized", "--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   try {
     const page = (await browser.pages())[0];
     page.setDefaultNavigationTimeout(60000);
 
-    // Log in to LinkedIn
+    // Step 1: Login
     const loggedIn = await linkedInLogin(page);
     if (!loggedIn) {
       await browser.close();
       return;
     }
 
-    // Scroll the feed using mouse wheel
-    await scrollWithMouseWheel(page, 15, 800, 1500);
+    // Go to LinkedIn feed with navigation timeout handling
+    try {
+      await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle2', timeout: 60000 });
+    } catch (error) {
+      if (error.message.includes('Navigation timeout')) {
+        console.log('⚠️ Navigation timeout loading feed, continuing anyway...');
+      } else {
+        throw error;
+      }
+    }
+    await sleep(5000);
 
-    console.log('\n✅✅✅ Scrolling automation completed! ✅✅✅');
+    const maxPosts = 10;  // Limit number of posts to process
+    let postsProcessed = 0;
 
-    // Keep browser open for observation
-    console.log('\n⏸️ Browser will stay open for 30 seconds...');
-    await sleep(30000);
+    while (postsProcessed < maxPosts) {
+      const posts = await page.$$('.feed-shared-update-v2');
+      if (posts.length === 0) {
+        console.log('❌ No posts found');
+        break;
+      }
 
-    // Uncomment below to close browser automatically after
+      const post = posts[postsProcessed];
+      if (!post) {
+        console.log('⚠️ No more new posts to process');
+        break;
+      }
+
+      await post.evaluate(el => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+      await sleep(3500);
+
+      await likePost(post);
+
+      const commentIcon = await post.$('svg use[href="#comment-small"]');
+      if (commentIcon) {
+        const commentBtnParent = await commentIcon.evaluateHandle(node => node.parentElement.parentElement);
+        try {
+          await commentBtnParent.click();
+          console.log('💬 Opened comment box');
+          await sleep(3500);
+
+          await commentOnPost(page);
+
+        } catch (error) {
+          console.log('❌ Error opening comment box:', error.message);
+        }
+      } else {
+        console.log('❌ Comment icon not found');
+      }
+
+      postsProcessed++;
+
+      await scrollOnce(page);
+    }
+
+    console.log('\n✅ Automation completed!');
+    await sleep(5000);
+
     // await browser.close();
-
-  } catch (error) {
-    console.error('❌ Automation error:', error.message);
+  } catch (err) {
+    console.error('❌ Unexpected automation error:', err);
   }
 }
 
