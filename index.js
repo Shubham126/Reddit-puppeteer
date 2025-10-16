@@ -293,7 +293,7 @@ async function loginScrollLikeAndComment() {
   }
 
   console.log(`\n${'='.repeat(60)}`);
-  console.log("✅✅✅ All posts processed (upvoted + commented)! ✅✅✅");
+  console.log("✅ All posts processed (upvoted + commented)!");
   console.log(`${'='.repeat(60)}\n`);
 
   // Keep browser open
