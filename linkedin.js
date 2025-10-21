@@ -25,30 +25,31 @@ async function linkedInLogin(page) {
       timeout: 60000 
     });
 
-    await page.waitForSelector('input[name="session_key"]', { timeout: 10000 });
+    // Wait for login form
+    await page.locator('input[name="session_key"]').wait();
 
-    // Check if manual login is needed (if no credentials provided)
+    // Check if manual login is needed
     if (!process.env.LINKEDIN_USERNAME || !process.env.LINKEDIN_PASSWORD) {
       console.log('⚠️ No credentials found in .env file');
-      console.log('⏳ Please login manually. Waiting 60 seconds...');
+      console.log('⏳ Please login manually (including CAPTCHA/2FA). Waiting 60 seconds...');
       await sleep(60000);
       return true;
     }
 
     console.log('🔑 Attempting automatic login...');
-    await page.type('input[name="session_key"]', process.env.LINKEDIN_USERNAME, { 
-      delay: randomDelay(150, 250) 
-    });
+    
+    // Fill username using locator
+    await page.locator('input[name="session_key"]').fill(process.env.LINKEDIN_USERNAME);
     await sleep(randomDelay(1000, 2000));
     
-    await page.type('input[name="session_password"]', process.env.LINKEDIN_PASSWORD, { 
-      delay: randomDelay(150, 250) 
-    });
+    // Fill password using locator
+    await page.locator('input[name="session_password"]').fill(process.env.LINKEDIN_PASSWORD);
     await sleep(randomDelay(1000, 2000));
 
-    await page.keyboard.press("Enter");
+    // Click login button
+    await page.locator('button[type="submit"]').click();
     
-    console.log('⏳ Waiting for navigation... If CAPTCHA appears, please solve it manually.');
+    console.log('⏳ Waiting for navigation... If CAPTCHA appears, solve it manually.');
     console.log('⏳ Waiting up to 60 seconds for login completion...');
     
     try {
@@ -59,7 +60,7 @@ async function linkedInLogin(page) {
       console.log('✅ Login successful!');
     } catch (navError) {
       if (navError.message.includes("Navigation timeout") || navError.message.includes("Timeout")) {
-        console.log("⚠️ Navigation timeout - assuming login success, proceeding...");
+        console.log("⚠️ Navigation timeout - assuming login success...");
       } else {
         throw navError;
       }
@@ -82,7 +83,7 @@ async function scrollOnce(page) {
   await sleep(randomDelay(3000, 4500));
 }
 
-// Like a post using the improved selector from your HTML
+// Like a post using modern locator API
 async function likePost(post) {
   try {
     // First check if already liked by looking for aria-pressed="true"
@@ -110,26 +111,31 @@ async function likePost(post) {
   }
 }
 
-// Comment on a specific post with improved selector
-async function commentOnSpecificPost(post, commentText = "Interested") {
+// Comment on a specific post using modern locator API
+async function commentOnSpecificPost(post, page, commentText = "Interested") {
   try {
-    // Find comment button using aria-label
-    const commentButton = await post.$('button[aria-label*="Comment"]');
+    console.log('💬 Attempting to comment on post...');
     
+    // Step 1: Click the comment button using locator with text selector
+    const commentButton = await post.$('button[aria-label*="Comment"]');
     if (!commentButton) {
-      console.log('❌ Comment button not found in post');
+      console.log('❌ Comment button not found');
       return false;
     }
-
-    await commentButton.click();
-    console.log('💬 Opened comment box');
-    await sleep(randomDelay(3000, 4000));
-
-    // Wait for the comment editor to appear
-    const commentBox = await post.$('div.ql-editor[contenteditable="true"]');
     
+    await commentButton.click();
+    console.log('✅ Comment box opened');
+    await sleep(randomDelay(3500, 4500));
+
+    // Step 2: Wait for and type in the comment editor using locator
+    console.log('⌨️ Finding comment editor...');
+    
+    // Wait for comment box to appear
+    await page.locator('div.ql-editor[contenteditable="true"]').wait({ timeout: 10000 });
+    
+    const commentBox = await post.$('div.ql-editor[contenteditable="true"]');
     if (!commentBox) {
-      console.log('❌ Comment box not found in post');
+      console.log('❌ Comment box not found');
       return false;
     }
 
@@ -137,33 +143,94 @@ async function commentOnSpecificPost(post, commentText = "Interested") {
     await sleep(randomDelay(1000, 1500));
 
     // Type comment with human-like delays
+    console.log(`⌨️ Typing comment: "${commentText}"`);
     await commentBox.type(commentText, { delay: randomDelay(100, 200) });
-    console.log(`💬 Typed comment: "${commentText}"`);
+    await sleep(randomDelay(2500, 3500));
 
-    await sleep(randomDelay(2000, 3000));
-
-    // Find and click the submit button
-    const postButton = await post.$('button.comments-comment-box__submit-button');
+    // Step 3: Find and click submit button using multiple strategies
+    console.log('🔍 Searching for submit button...');
     
-    if (!postButton) {
-      console.log('❌ Comment submit button not found in post');
+    let submitButton = null;
+    
+    // Strategy 1: Use locator with text selector (most reliable with modern API)
+    try {
+      const textLocator = page.locator('button ::-p-text(Comment)');
+      
+      // Filter to find the button within the current post
+      const buttons = await post.$$('button');
+      for (const button of buttons) {
+        const text = await button.evaluate(el => el.textContent.trim());
+        const hasClass = await button.evaluate(el => 
+          el.className.includes('submit-button') || 
+          el.className.includes('artdeco-button--primary')
+        );
+        
+        if (text === 'Comment' && hasClass) {
+          submitButton = button;
+          console.log('✅ Found submit button via text and class match');
+          break;
+        }
+      }
+    } catch (e) {
+      console.log('⚠️ Text locator strategy failed, trying alternatives...');
+    }
+
+    // Strategy 2: Try class-based selector
+    if (!submitButton) {
+      submitButton = await post.$('button.comments-comment-box__submit-button--cr');
+      if (submitButton) {
+        console.log('✅ Found submit button via class selector');
+      }
+    }
+
+    // Strategy 3: Try primary button class
+    if (!submitButton) {
+      const primaryButtons = await post.$$('button.artdeco-button--primary');
+      for (const button of primaryButtons) {
+        const text = await button.evaluate(el => el.textContent.trim());
+        if (text === 'Comment' || text === 'Post') {
+          submitButton = button;
+          console.log('✅ Found submit button via primary button class');
+          break;
+        }
+      }
+    }
+
+    if (!submitButton) {
+      console.log('❌ Submit button not found after trying all strategies');
       return false;
     }
 
-    // Check if button is enabled
-    const isEnabled = await postButton.evaluate(el => !el.disabled);
-    
+    // Wait for button to be enabled
+    console.log('⏳ Waiting for submit button to be enabled...');
+    try {
+      await page.waitForFunction(
+        (btn) => !btn.disabled && btn.offsetParent !== null,
+        { timeout: 8000 },
+        submitButton
+      );
+    } catch (e) {
+      console.log('⚠️ Button enable check timeout, attempting click anyway...');
+    }
+
+    // Check if enabled before clicking
+    const isEnabled = await submitButton.evaluate(el => !el.disabled);
     if (!isEnabled) {
       console.log('⚠️ Submit button is disabled, skipping...');
       return false;
     }
 
-    await postButton.click();
-    console.log('📤 Comment submitted successfully!');
+    // Click the submit button
+    console.log('🖱️ Clicking submit button...');
+    await submitButton.click();
+    console.log('✅ Comment posted successfully!');
+    
     await sleep(randomDelay(3000, 5000));
     return true;
+    
   } catch (error) {
     console.error('❌ Error commenting on post:', error.message);
+    console.error('Error details:', error.stack);
     return false;
   }
 }
@@ -190,7 +257,10 @@ async function linkedInAutomation() {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    // Step 1: Login (with manual intervention support)
+    console.log('\n🚀 Starting LinkedIn Automation with Modern Locator API\n');
+    console.log('=' .repeat(60));
+
+    // Step 1: Login
     const loggedIn = await linkedInLogin(page);
     if (!loggedIn) {
       console.log('❌ Login failed. Exiting...');
@@ -199,7 +269,7 @@ async function linkedInAutomation() {
     }
 
     // Navigate to LinkedIn feed
-    console.log('🏠 Navigating to LinkedIn feed...');
+    console.log('\n🏠 Navigating to LinkedIn feed...');
     try {
       await page.goto('https://www.linkedin.com/feed/', { 
         waitUntil: 'networkidle2', 
@@ -221,7 +291,9 @@ async function linkedInAutomation() {
     let likesCount = 0;
     let commentsCount = 0;
 
-    console.log(`\n🤖 Starting automation - processing up to ${maxPosts} posts...\n`);
+    console.log('\n' + '='.repeat(60));
+    console.log(`🤖 Starting post processing - Up to ${maxPosts} posts`);
+    console.log('='.repeat(60) + '\n');
 
     while (postsProcessed < maxPosts) {
       // Get all posts currently visible
@@ -239,9 +311,11 @@ async function linkedInAutomation() {
         break;
       }
 
-      console.log(`\n--- Processing Post ${postsProcessed + 1}/${maxPosts} ---`);
+      console.log('\n' + '-'.repeat(60));
+      console.log(`📝 Processing Post ${postsProcessed + 1}/${maxPosts}`);
+      console.log('-'.repeat(60));
 
-      // Scroll post into view
+      // Scroll post into view smoothly
       await post.evaluate(el => el.scrollIntoView({ 
         behavior: 'smooth', 
         block: 'center' 
@@ -249,14 +323,14 @@ async function linkedInAutomation() {
       await sleep(randomDelay(2500, 3500));
 
       // Try to like the post
-      const liked = await likePost(post);
+      const liked = await likePost(post, page);
       if (liked) likesCount++;
 
       // Random delay between like and comment
-      await sleep(randomDelay(2000, 3000));
+      await sleep(randomDelay(2000, 3500));
 
       // Try to comment on the post
-      const commented = await commentOnSpecificPost(post, "Interested");
+      const commented = await commentOnSpecificPost(post, page, "Interested");
       if (commented) commentsCount++;
 
       postsProcessed++;
@@ -264,28 +338,40 @@ async function linkedInAutomation() {
       // Scroll to load next post
       await scrollOnce(page);
       
-      // Longer delay between posts to appear more human
-      await sleep(randomDelay(5000, 8000));
+      // Longer delay between posts to appear human-like
+      console.log(`⏳ Pausing before next post...`);
+      await sleep(randomDelay(6000, 10000));
     }
 
-    console.log('\n========================================');
-    console.log('✅ Automation completed successfully!');
-    console.log(`📊 Stats:`);
-    console.log(`   - Posts processed: ${postsProcessed}`);
-    console.log(`   - Likes given: ${likesCount}`);
-    console.log(`   - Comments posted: ${commentsCount}`);
-    console.log('========================================\n');
+    console.log('\n' + '='.repeat(60));
+    console.log('✅ AUTOMATION COMPLETED SUCCESSFULLY!');
+    console.log('='.repeat(60));
+    console.log('\n📊 Final Statistics:');
+    console.log(`   • Posts Processed: ${postsProcessed}/${maxPosts}`);
+    console.log(`   • Likes Given: ${likesCount}`);
+    console.log(`   • Comments Posted: ${commentsCount}`);
+    console.log(`   • Success Rate: ${Math.round(((likesCount + commentsCount) / (postsProcessed * 2)) * 100)}%`);
+    console.log('\n' + '='.repeat(60));
 
-    console.log('⏳ Browser will remain open for 10 seconds...');
-    await sleep(10000);
+    console.log('\n⏳ Browser will remain open for 15 seconds...');
+    await sleep(15000);
 
+    console.log('👋 Closing browser...');
     // Uncomment to close browser automatically
     // await browser.close();
     
   } catch (err) {
-    console.error('❌ Unexpected automation error:', err);
+    console.error('\n❌ CRITICAL ERROR:');
+    console.error('=' .repeat(60));
+    console.error('Error message:', err.message);
+    console.error('Stack trace:', err.stack);
+    console.error('='.repeat(60));
   }
 }
 
 // Start the automation
+console.log('\n🎯 LinkedIn Automation Bot - Modern Locator API');
+console.log('⚠️  Educational purposes only - violates LinkedIn ToS');
+console.log('='.repeat(60) + '\n');
+
 linkedInAutomation();
